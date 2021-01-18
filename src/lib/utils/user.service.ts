@@ -237,7 +237,7 @@ export class UserService {
     }
   }
 
-  async sendEmailsToCustomers(users: [], subject: string, body: string): Promise<any> {
+  async sendEmailsToCustomers(users: any[], subject: string, body: string): Promise<any> {
     sgMail.setApiKey(process.env.SEND_GRID_API_KEY);
     sgMail.setSubstitutionWrappers('{{', '}}'); // Configure the substitution tag wrappers globally
     const emails = [];
@@ -313,7 +313,7 @@ export class UserService {
     }
   }
 
-  async sendSMS(users: [], content: string): Promise<any> {
+  async sendSMS(users: any[], content: string): Promise<any> {
     let receivers = [];
     for (const u of users) {
       if (u['Tel']) {

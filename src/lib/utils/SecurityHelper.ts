@@ -3,7 +3,7 @@ var crypto = require('crypto');
 
 export class SecurityHelper {
 
-    static async CheckPrivilege_AdminOrder(role_id: []) {
+    static async CheckPrivilege_AdminOrder(role_id: any[]) {
         const IsInRole = role_id.some(x => x === UserRole.ADMIN_MANAGE_ORDER);
         if (IsInRole)
             return { "success": true, "message": "" };
@@ -79,7 +79,7 @@ export class SecurityHelper {
 
     static async GetParamByName(arrParams: Object, paramName: string): Promise<any> {
 
-        var cArrParams = arrParams as [];
+        var cArrParams = arrParams as any[];
         for (var item of cArrParams) {
             if (item["key"] == paramName) {
                 return item["value"];
@@ -284,6 +284,7 @@ export class SecurityHelper {
                 return { "success": false, "message": "Not Allow." };
             }
         }
+        return { "success": false, "message": "Not Allow." };
     }
 
     static async CheckPrivilige_ManageOrderDetail(user_id: number, role_id: number[], method: string, data: any, id: any) {
