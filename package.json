@@ -92,7 +92,9 @@
     "odata-v4-parser": "^0.1.29",
     "odata-v4-service-document": "0.0.3",
     "odata-v4-service-metadata": "^0.1.6",
+    "pg": "^8.5.1",
     "qs": "^6.5.2",
+    "ramda": "^0.27.1",
     "reflect-metadata": "^0.1.12",
     "tslib": "^1.9.3"
   },
