@@ -395,7 +395,7 @@ class ODataStreamWrapper extends Transform {
         if (typeof done == "function") done();
     }
 
-    protected _flush(done?: Function) {
+    public _flush(done?: Function) {
         if (typeof done == "function") done();
     }
 
@@ -485,6 +485,30 @@ export class ODataProcessor extends Transform {
                 let fn = getResourcePartFunction(part.type) || ("__" + part.type);
                 switch (fn) {
                     case "__actionOrFunction":
+                 //       if(this.query.filter.indexOf('PartnerId eq') >0)
+                    
+                
+                        //  if(this.query)
+                        //  {
+                        //     var filterValue=this.query["$filter"];
+                        //     if(filterValue)
+                        //     {
+                        //         var arr=filterValue.split('PartnerId eq ');
+                        //         if(arr&&arr.length>0)
+                        //         {
+                        //             var value=arr[1];
+                        //             var match=value.match(/\d+/);
+                        //         if(match!=null && match.length>0)
+                        //         {
+                        //             var partnerid=match[0];
+                        //             part.params["_h_partnerid"]=parseInt(partnerid);
+                        //         }
+                        //         }
+                                
+
+                        //     }
+                           
+                        //  }
                         return this.__actionOrFunction.call(this, part);
                     case "__actionOrFunctionImport":
                         return this.__actionOrFunctionImport.call(this, part);
@@ -581,7 +605,7 @@ export class ODataProcessor extends Transform {
         }
     }
 
-    protected _flush(done?: Function) {
+    public _flush(done?: Function) {
         if (this.streamEnabled && this.streamObject) {
             if (this.options.objectMode) {
                 let flushObject: any = {
@@ -999,7 +1023,13 @@ export class ODataProcessor extends Transform {
         for (let prop in obj) {
             if (prop.indexOf("@odata") >= 0)
                 delete obj[prop];
-            if (typeof obj[prop] == "object") this.__stripOData(obj[prop]);
+            if (typeof obj[prop] == "object") 
+            {
+                console.log(obj[prop]);
+                this.__stripOData(obj[prop]);
+            
+            }
+            
         }
     }
 
@@ -1559,6 +1589,28 @@ export class ODataProcessor extends Transform {
         if (!this.streamEnabled) this.resultCount = 0;
     }
 
+    private combineMerge(target, source, options) {
+        const destination = target.slice()
+
+        const emptyTarget = value => Array.isArray(value) ? [] : {}
+        const clone = (value, options) => {
+            deepmerge(emptyTarget(value), value, options)
+        }
+
+        source.forEach(function(e, i) {
+            if (typeof destination[i] === 'undefined') {
+                const cloneRequested = options.clone !== false
+                const shouldClone = cloneRequested && options.isMergeableObject(e)
+                destination[i] = shouldClone ? clone(e, options) : e
+            } else if (options.isMergeableObject(e)) {
+                destination[i] = deepmerge(target[i], e, options)
+            } else if (target.indexOf(e) === -1) {
+                destination.push(e)
+            }
+        })
+        return destination
+    }
+
     private async __applyParams(container: any, name: string, params: any, queryString?: string | Token, result?: any, include?) {
         let queryParam, filterParam, contextParam, streamParam, resultParam, idParam, bodyParam;
 
@@ -1576,7 +1628,7 @@ export class ODataProcessor extends Transform {
             let queryAst = queryString || this.resourcePath.ast.value.query || null;
             if (typeof queryAst == "string") {
                 queryAst = this.serverType.parser.query(queryAst, { metadata: this.resourcePath.ast.metadata || this.serverType.$metadata().edmx });
-                if (!include) queryAst = deepmerge(queryAst, this.resourcePath.ast.value.query || {});
+                if (!include) queryAst = deepmerge(queryAst, this.resourcePath.ast.value.query || {}, { arrayMerge: this.combineMerge });
                 const lastNavigationPath = this.resourcePath.navigation[this.resourcePath.navigation.length - 1];
                 const queryType = lastNavigationPath.type == "QualifiedEntityTypeName" ?
                     this.resourcePath.navigation[this.resourcePath.navigation.length - 1].node[ODATA_TYPE] :
@@ -1611,7 +1663,7 @@ export class ODataProcessor extends Transform {
                 filterAst = token && token.value && token.value.options && (<Token[]>token.value.options).find(t => t.type == TokenType.Filter);
             }
             if (filterAst && !include) {
-                filterAst = deepmerge(filterAst, (resourceFilterAst || {}).value || {});
+                filterAst = deepmerge(filterAst, (resourceFilterAst || {}).value || {}, { arrayMerge: this.combineMerge });
             }
             params[filterParam] = this.serverType.connector ? this.serverType.connector.createFilter(filterAst, elementType) : filterAst;
 

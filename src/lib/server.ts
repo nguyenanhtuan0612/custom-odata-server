@@ -17,38 +17,251 @@ import { ODataProcessor, ODataProcessorOptions, ODataMetadataType } from "./proc
 import { HttpRequestError, UnsupportedMediaTypeError } from "./error";
 import { ContainerBase } from "./edm";
 import { Readable, Writable } from "stream";
+import { SecurityHelper, UserRole } from "./utils/SecurityHelper";
+import { ElasticSearchService } from './utils/ElasticSearchService';
+import { GHTK_CallbackInfo } from './utils/GHTK_CallbackInfo';
+import connect from './utils/connect';
+import { EmailService } from './utils/email.service';
+import { GHTK_service } from './utils/GHTK_service';
+import { UserService } from './utils/user.service';
+import { ServiceHelper } from './utils/service';
+import { BookService } from './utils/book.service';
+import { OrderService } from './utils/order.service';
+import { Constants } from './utils/constants';
 
+const dotenv = require('dotenv');
+const asyncRedis = require("async-redis");
+// const session = require('express-session');
+let jwt = require('jsonwebtoken');
+var fs = require('fs');
+var util = require('util');
+var logFile = fs.createWriteStream('customize_log.txt', { flags: 'a' });
+// Or 'w' to truncate the file every time the process starts.
+var logStdout = process.stdout;
+
+console.info = function () {
+    if (arguments && arguments.length > 0)
+        arguments[0] = '' + new Date() + ':' + arguments[0];
+    logFile.write(util.format.apply(null, arguments) + '\n');
+    logStdout.write(util.format.apply(null, arguments) + '\n');
+}
+//console.error = console.log;
 /** HTTP context interface when using the server HTTP request handler */
-export interface ODataHttpContext{
-    url:string
-    method:string
-    protocol:"http"|"https"
-    host:string
-    base:string
-    request:express.Request & Readable
-    response:express.Response & Writable
+export interface ODataHttpContext {
+    url: string
+    method: string
+    protocol: "http" | "https"
+    host: string
+    base: string
+    request: express.Request & Readable
+    response: express.Response & Writable
 }
 
-function ensureODataMetadataType(req, res){
-    let metadata:ODataMetadataType = ODataMetadataType.minimal;
-    if (req.headers && req.headers.accept && req.headers.accept.indexOf("odata.metadata=") >= 0){
+async function CheckPriviligeRequest(req) {
+    // skip security by following function
+    if (req.originalUrl.indexOf("/login") >= 0
+        || req.originalUrl.indexOf('$metadata') >= 0
+        || req.originalUrl.indexOf('v_') >= 0
+        || req.originalUrl.indexOf('resetPasswordUserBE') >= 0
+        || req.originalUrl.indexOf('Users/Mcbook.sendOTPToEmail') >= 0
+        || req.originalUrl.indexOf('Users/Mcbook.registerUser') >= 0
+        || req.originalUrl.indexOf('Users/Mcbook.updatePassword') >= 0) {
+        return { "success": true, "message": "" }
+    }
+
+    // start check security
+    var body = req.body;
+    var token = null;
+    try {
+        var Authorization = req.headers["authorization"].toString();
+        token = Authorization.replace('Bearer ', '').replace('bearer ', '');
+    }
+    catch (err) {
+
+    }
+
+    var method = req.method;
+    var originUrl = req.url;
+    var url = req.url;
+    try {
+        if (url.length > 1)
+            url = url.substr(1, url.length - 1);
+    }
+    catch (err) {
+
+    }
+    var splitChar = '?';
+    var index = 10000;
+    if (url.indexOf('/') < index && url.indexOf('/') >= 0) {
+        splitChar = '/';
+        index = url.indexOf('/');
+    }
+
+    var controllerName = url.split("(")[0];
+    var idCheck = 0;
+    try {
+        idCheck = parseInt(originUrl.replace('/', '').replace(controllerName, '').replace('(', '').replace(')', ''));
+    }
+    catch (err) {
+
+    }
+    if (url.indexOf('(') < index && url.indexOf('(') >= 0 && idCheck > 0) {
+        splitChar = '(';
+        index = url.indexOf('(');
+    }
+
+    var user_id = null;
+    var role_id = null;
+    try {
+        await jwt.verify(token, process.env.JWT_SECRET, function (err, decoded) {
+            if (!err) {
+                user_id = decoded.id;
+                role_id = decoded.roleId;
+            }
+
+            return null;
+        });
+    }
+    catch (err) {
+
+    }
+
+    if (!user_id) {
+        return { "success": false, "message": "Không thể định danh tài khoản. Vui lòng đăng nhập lại." };
+    }
+
+    // if (url.startsWith("ExternalService")) {
+    //     return await SecurityHelper.CheckPrivilige_ExternalSecurity(user_id, role_id, method, req)
+    // }
+
+    var isFunction = false;
+    if (url.indexOf('/Mcbook.') >= 0)
+        isFunction = true;
+    if (!isFunction) {
+        var controllerNames = url.split(splitChar)[0];
+        var id = 0;
+        if (method !== "POST") {
+            try {
+                id = parseInt(originUrl.replace('/', '').replace(controllerNames, '').replace('(', '').replace(')', ''));
+            }
+            catch (err) {
+                
+            }
+        } 
+        return await SecurityHelper.CheckPrivilige(user_id, role_id, method, controllerNames, req.body, id);
+    }
+    else {
+        try {
+            var parts = url.split('(');
+            var arrParams = [];
+            var params = parts[1].replace(')', '');
+            for (var item of params.split(',')) {
+                var itemparts = item.split('=');
+                // var paramName = itemparts[0].toString();
+                arrParams.push({ "key": itemparts[0], "value": itemparts[1] });
+
+            }
+            return await SecurityHelper.CheckPrivilegeFunction(user_id, role_id, parts[0], arrParams);
+
+        }
+        catch (error) {
+            return { "success": true, "message": "" };
+        }
+    }
+}
+
+function Apply_Filter(url: string, userId: string, appId: string) {
+    url = url.replace(/[\/]+/g, "/").replace(":/", "://");
+    url = url.split('+').join('%20');
+    url = decodeURIComponent(url);
+
+    if (url.indexOf('/Books(') >= 0) {
+        if (url.indexOf('$filter=') >= 0) {
+            url = url.replace('$filter=', '$filter=Id eq ' + userId + ' and ');
+        }
+        else {
+            if (url.indexOf('?') >= 0) {
+                url = url + '&$filter=Id eq ' + userId;
+            }
+            else {
+                url = url + '?$filter=Id eq ' + userId;
+            }
+        }
+    }
+
+    // if (url.indexOf("/Mcbook.") >= 0) {
+
+    //     var arr1 = url.split('(');
+    //     if (arr1 && arr1.length > 1) {
+    //         var arr2 = arr1[1].split(')');
+    //         if (arr2 && arr2.length > 0) {
+    //             var allParams = arr2[0].replace(' ', '');
+    //             if (allParams.length > 0) {
+    //                 url = url.replace(')', `,appId='${appId}')`);
+    //             }
+    //             else {
+    //                 url = url.replace(')', `appId='${appId}')`);
+    //             }
+    //         }
+
+    //     }
+
+    // }
+
+    var tableWithId = new RegExp(/^\/[a-zA-Z]*\([1-9]*\)/);
+    var isTableWithId = tableWithId.test(url);
+    var tempUrlRemoveChildFilter = replaceAll(url, '($filter=', '');
+
+    if (url.startsWith("/v_") === false
+        && url.endsWith("/login") === false
+        && url.endsWith("$metadata") === false
+        && url.indexOf('/Mcbook.') === -1
+        && (isTableWithId === false)
+        && (url.startsWith("/ExternalService") === false)) {
+        if (url.indexOf("$filter=") != - 1 && tempUrlRemoveChildFilter.indexOf("$filter=") != - 1) {
+            const temp1 = url.split("$filter=");
+            const temp2 = temp1[1].split("&");
+            const currentCondition = temp2[0];
+            const newCondition = `(${currentCondition}) and IsDeleted ne true`
+            url = url.replace(currentCondition, newCondition);
+        } else {
+            if (url.indexOf("?") != -1) {
+                url = url + "&$filter=IsDeleted ne true";
+            } else {
+                url = url + "?$filter=IsDeleted ne true";
+            }
+        }
+    }
+
+    return url;
+}
+function replaceAll(str, find, replace) {
+    return str.replace(new RegExp(escapeRegExp(find), 'g'), replace);
+}
+function escapeRegExp(str) {
+    return str.replace(/([.*+?^=!:${}()|\[\]\/\\])/g, "\\$1");
+}
+function ensureODataMetadataType(req, res) {
+    let metadata: ODataMetadataType = ODataMetadataType.minimal;
+    if (req.headers && req.headers.accept && req.headers.accept.indexOf("odata.metadata=") >= 0) {
         if (req.headers.accept.indexOf("odata.metadata=full") >= 0) metadata = ODataMetadataType.full;
         else if (req.headers.accept.indexOf("odata.metadata=none") >= 0) metadata = ODataMetadataType.none;
     }
 
     res["metadata"] = metadata;
 }
-function ensureODataContentType(req, res, contentType?){
+function ensureODataContentType(req, res, contentType?) {
     contentType = contentType || "application/json";
     if (contentType.indexOf("odata.metadata=") < 0) contentType += `;odata.metadata=${ODataMetadataType[res["metadata"]]}`;
     if (contentType.indexOf("odata.streaming=") < 0) contentType += ";odata.streaming=true";
     if (contentType.indexOf("IEEE754Compatible=") < 0) contentType += ";IEEE754Compatible=false";
-    if (req.headers.accept && req.headers.accept.indexOf("charset") > 0){
+    if (req.headers.accept && req.headers.accept.indexOf("charset") > 0) {
         contentType += `;charset=${res["charset"]}`;
     }
     res.contentType(contentType);
 }
-function ensureODataHeaders(req, res, next?){
+function ensureODataHeaders(req, res, next?) {
+
     res.setHeader("OData-Version", "4.0");
 
     ensureODataMetadataType(req, res);
@@ -56,7 +269,7 @@ function ensureODataHeaders(req, res, next?){
     res["charset"] = charset;
     ensureODataContentType(req, res);
 
-    if ((req.headers.accept && req.headers.accept.indexOf("charset") < 0) || req.headers["accept-charset"]){
+    if ((req.headers.accept && req.headers.accept.indexOf("charset") < 0) || req.headers["accept-charset"]) {
         const bufferEncoding = {
             "utf-8": "utf8",
             "utf-16": "utf16le"
@@ -70,21 +283,31 @@ function ensureODataHeaders(req, res, next?){
 
     if (typeof next == "function") next();
 }
-
+function startsWith(str, word) {
+    return str.lastIndexOf(word, 0) === 0;
+}
 /** ODataServer base class to be extended by concrete OData Server data sources */
-export class ODataServerBase extends Transform{
-    private static _metadataCache:any
-    static namespace:string
+export class ODataServerBase extends Transform {
+    private static _metadataCache: any
+    static namespace: string
     static container = new ContainerBase();
     static parser = ODataParser;
-    static connector:IODataConnector
-    static validator:(odataQuery:string | Token) => null;
-    static errorHandler:express.ErrorRequestHandler = ODataErrorHandler;
-    private serverType:typeof ODataServer
+    static connector: IODataConnector
+    static validator: (odataQuery: string | Token) => null;
+    static errorHandler: express.ErrorRequestHandler = ODataErrorHandler;
+    private serverType: typeof ODataServer
 
-    static requestHandler(){
-        return (req:express.Request, res:express.Response, next:express.NextFunction) => {
-            try{
+    static async mytestfunction() {
+        var myCache = null;
+        var cacheKey = 'BOOK:CACHEBLOCK:ISNEW';
+        myCache = asyncRedis.createClient(6379, '192.168.118.122');
+        var data = await myCache.get(cacheKey);
+        //   console.log('data='+data);
+        return data;
+    }
+    static requestHandler() {
+        return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+            try {
                 ensureODataHeaders(req, res);
                 let processor = this.createProcessor({
                     url: req.url,
@@ -98,36 +321,47 @@ export class ODataServerBase extends Transform{
                     metadata: res["metadata"]
                 });
                 processor.on("header", (headers) => {
-                    for (let prop in headers){
-                        if (prop.toLowerCase() == "content-type"){
+                    for (let prop in headers) {
+                        if (prop.toLowerCase() == "content-type") {
                             ensureODataContentType(req, res, headers[prop]);
-                        }else{
-                            res.setHeader(prop, headers[prop]);
+                        } else {
+                            // if(headers[prop]==undefined )
+                            // headers[prop]='http://localhost/odata/Categories(11)/$value';
+                            if ((prop) && (headers[prop])) {
+                                res.setHeader(prop, headers[prop]);
+                            }
                         }
                     }
                 });
+                // this.mytestfunction().then(
+                //     console.log
+                // );
                 let hasError = false;
                 processor.on("data", (chunk, encoding, done) => {
-                    if (!hasError){
+                    if (!hasError) {
                         res.write(chunk, encoding, done);
                     }
                 });
                 let body = req.body && Object.keys(req.body).length > 0 ? req.body : req;
                 let origStatus = res.statusCode;
-                processor.execute(body).then((result:ODataResult) => {
-                    try{
-                        if (result){
+                processor.execute(body).then((result: ODataResult) => {
+                    try {
+                        if (result) {
                             res.status((origStatus != res.statusCode && res.statusCode) || result.statusCode || 200);
-                            if (!res.headersSent){
+                            if (result.statusCode == 204) {
+                                res.status(200);
+                                res.send({ "success": true });
+                            }
+                            if (!res.headersSent) {
                                 ensureODataContentType(req, res, result.contentType || "text/plain");
                             }
-                            if (typeof result.body != "undefined"){
+                            if (typeof result.body != "undefined") {
                                 if (typeof result.body != "object") res.send("" + result.body);
                                 else if (!res.headersSent) res.send(result.body);
                             }
                         }
                         res.end();
-                    }catch(err){
+                    } catch (err) {
                         hasError = true;
                         next(err);
                     }
@@ -135,27 +369,27 @@ export class ODataServerBase extends Transform{
                     hasError = true;
                     next(err);
                 });
-            }catch(err){
+            } catch (err) {
                 next(err);
             }
         };
     }
 
-    static execute<T>(url:string, body?:object):Promise<ODataResult<T>>;
-    static execute<T>(url:string, method?:string, body?:object):Promise<ODataResult<T>>;
-    static execute<T>(context:object, body?:object):Promise<ODataResult<T>>;
-    static execute<T>(url:string | object, method?:string | object, body?:object):Promise<ODataResult<T>>{
-        let context:any = {};
-        if (typeof url == "object"){
+    static execute<T>(url: string, body?: object): Promise<ODataResult<T>>;
+    static execute<T>(url: string, method?: string, body?: object): Promise<ODataResult<T>>;
+    static execute<T>(context: object, body?: object): Promise<ODataResult<T>>;
+    static execute<T>(url: string | object, method?: string | object, body?: object): Promise<ODataResult<T>> {
+        let context: any = {};
+        if (typeof url == "object") {
             context = Object.assign(context, url);
-            if (typeof method == "object"){
+            if (typeof method == "object") {
                 body = method;
             }
             url = undefined;
             method = undefined;
-        }else if (typeof url == "string"){
+        } else if (typeof url == "string") {
             context.url = url;
-            if (typeof method == "object"){
+            if (typeof method == "object") {
                 body = method;
                 method = "POST";
             }
@@ -170,41 +404,41 @@ export class ODataServerBase extends Transform{
         let flushObject;
         let response = "";
         if (context.response instanceof Writable) processor.pipe(context.response);
-        processor.on("data", (chunk:any) => {
-            if (!(typeof chunk == "string" || chunk instanceof Buffer)){
-                if (chunk["@odata.context"] && chunk.value && Array.isArray(chunk.value) && chunk.value.length == 0){
+        processor.on("data", (chunk: any) => {
+            if (!(typeof chunk == "string" || chunk instanceof Buffer)) {
+                if (chunk["@odata.context"] && chunk.value && Array.isArray(chunk.value) && chunk.value.length == 0) {
                     flushObject = chunk;
                     flushObject.value = values;
-                }else{
+                } else {
                     values.push(chunk);
                 }
-            }else response += chunk.toString();
+            } else response += chunk.toString();
         });
-        return processor.execute(context.body || body).then((result:ODataResult<T>) => {
-            if (flushObject){
+        return processor.execute(context.body || body).then((result: ODataResult<T>) => {
+            if (flushObject) {
                 result.body = flushObject;
                 if (!result.elementType || typeof result.elementType == "object") result.elementType = flushObject.elementType;
                 delete flushObject.elementType;
                 result.contentType = result.contentType || "application/json";
-            }else if (result && response){
+            } else if (result && response) {
                 result.body = <any>response;
             }
             return result;
         });
     }
 
-    constructor(opts?:TransformOptions){
+    constructor(opts?: TransformOptions) {
         super(Object.assign(<TransformOptions>{
             objectMode: true
         }, opts));
         this.serverType = Object.getPrototypeOf(this).constructor;
     }
 
-    _transform(chunk:any, _?:string, done?:Function){
-        if ((chunk instanceof Buffer) || typeof chunk == "string"){
-            try{
+    _transform(chunk: any, _?: string, done?: Function) {
+        if ((chunk instanceof Buffer) || typeof chunk == "string") {
+            try {
                 chunk = JSON.parse(chunk.toString());
-            }catch(err){
+            } catch (err) {
                 return done(err);
             }
         }
@@ -214,19 +448,19 @@ export class ODataServerBase extends Transform{
         }, <any>done);
     }
 
-    _flush(done?:Function){
+    _flush(done?: Function) {
         if (typeof done == "function") done();
     }
 
-    static createProcessor(context:any, options?:ODataProcessorOptions){
+    static createProcessor(context: any, options?: ODataProcessorOptions) {
         return new ODataProcessor(context, this, options);
     }
 
-    static $metadata():ServiceMetadata;
-    static $metadata(metadata:Metadata.Edmx | any);
-    static $metadata(metadata?):ServiceMetadata{
-        if (metadata){
-            if (!(metadata instanceof Metadata.Edmx)){
+    static $metadata(): ServiceMetadata;
+    static $metadata(metadata: Metadata.Edmx | any);
+    static $metadata(metadata?): ServiceMetadata {
+        if (metadata) {
+            if (!(metadata instanceof Metadata.Edmx)) {
                 if (metadata.version && metadata.dataServices && Array.isArray(metadata.dataServices.schema)) this._metadataCache = ServiceMetadata.processMetadataJson(metadata);
                 else this._metadataCache = ServiceMetadata.defineEntities(metadata);
             }
@@ -234,119 +468,211 @@ export class ODataServerBase extends Transform{
         return this._metadataCache || (this._metadataCache = ServiceMetadata.processMetadataJson(createMetadataJSON(this)));
     }
 
-    static document():ServiceDocument{
+    static document(): ServiceDocument {
         return ServiceDocument.processEdmx(this.$metadata().edmx);
     }
 
-    static addController(controller:typeof ODataController, isPublic?:boolean);
-    static addController(controller:typeof ODataController, isPublic?:boolean, elementType?:Function);
-    static addController(controller:typeof ODataController, entitySetName?:string, elementType?:Function);
-    static addController(controller:typeof ODataController, entitySetName?:string | boolean, elementType?:Function){
+    static addController(controller: typeof ODataController, isPublic?: boolean);
+    static addController(controller: typeof ODataController, isPublic?: boolean, elementType?: Function);
+    static addController(controller: typeof ODataController, entitySetName?: string, elementType?: Function);
+    static addController(controller: typeof ODataController, entitySetName?: string | boolean, elementType?: Function) {
         odata.controller(controller, <string>entitySetName, elementType)(this);
     }
-    static getController(elementType:Function){
-        for (let i in this.prototype){
+    static getController(elementType: Function) {
+        for (let i in this.prototype) {
             if (this.prototype[i] &&
                 this.prototype[i].prototype &&
                 this.prototype[i].prototype instanceof ODataController &&
-                this.prototype[i].prototype.elementType == elementType){
-                    return this.prototype[i];
-                }
+                this.prototype[i].prototype.elementType == elementType) {
+                return this.prototype[i];
+            }
         }
         return null;
     }
 
-    static create():express.Router;
-    static create(port:number):http.Server;
-    static create(path:string, port:number):http.Server;
-    static create(port:number, hostname:string):http.Server;
-    static create(path?:string | RegExp | number, port?:number | string, hostname?:string):http.Server;
-    static create(path?:string | RegExp | number, port?:number | string, hostname?:string):http.Server | express.Router{
+    static create(): express.Router;
+    static create(port: number): http.Server;
+    static create(path: string, port: number): http.Server;
+    static create(port: number, hostname: string): http.Server;
+    static create(path?: string | RegExp | number, port?: number | string, hostname?: string): http.Server;
+    static create(path?: string | RegExp | number, port?: number | string, hostname?: string): http.Server | express.Router {
         let server = this;
         let router = express.Router();
-        router.use((req, _, next) => {
+
+        router.use(async (req, _, next) => {
+            let userId = '';
+            let appId = null;
+            var token = null;
+            try {
+                var Authorization = req.headers["authorization"].toString();
+                token = Authorization.replace('Bearer ', '').replace('bearer ', '');
+                await jwt.verify(token, process.env.JWT_SECRET, function (err, decoded) {
+                    if (!err) {
+                        userId = decoded.id;
+                    }
+
+                    return null;
+                });
+            }
+            catch (err) {
+
+            }
+
+            appId = req.url.indexOf("/Bizbook") >= 0 ? Constants.AppId.Bizbook_Vip : Constants.AppId.TKBook_Vip;
+
+            if (req.method === "GET") {
+                req.url = Apply_Filter(req.url, userId, appId);
+                req.originalUrl = Apply_Filter(req.originalUrl, userId, appId);
+            }
+
             req.url = req.url.replace(/[\/]+/g, "/").replace(":/", "://");
+            req.url = req.url.split('+').join('%20');
+            // req.url = req.url.split('/').join('%2F');
+            req.url = decodeURIComponent(req.url);
+            req.originalUrl = req.originalUrl.split('+').join('%20');
+            // req.originalUrl = req.originalUrl.split('/').join('%2F');
+            req.originalUrl = decodeURIComponent(req.originalUrl);
+            // return next(new HttpRequestError(401, "Unauthorize"));
+            //originalUrl
             if (req.headers["odata-maxversion"] && req.headers["odata-maxversion"] < "4.0") return next(new HttpRequestError(500, "Only OData version 4.0 supported"));
             next();
         });
         router.use(bodyParser.json());
         if ((<any>server).cors) router.use(cors());
         router.use((req, res, next) => {
-            res.setHeader("OData-Version", "4.0");
-            if (req.headers.accept &&
-                req.headers.accept.indexOf("application/json") < 0 &&
-                req.headers.accept.indexOf("text/html") < 0 &&
-                req.headers.accept.indexOf("*/*") < 0 &&
-                req.headers.accept.indexOf("xml") < 0){
-                next(new UnsupportedMediaTypeError());
-            }else next();
+            var body = req.body;
+
+            CheckPriviligeRequest(req).then((checkPriviligeResult) => {
+                if (!checkPriviligeResult["success"])
+                    return next(new HttpRequestError(401, checkPriviligeResult["message"]));
+                else {
+                    res.setHeader("OData-Version", "4.0");
+                    if (req.headers.accept &&
+                        req.headers.accept.indexOf("application/json") < 0 &&
+                        req.headers.accept.indexOf("text/html") < 0 &&
+                        req.headers.accept.indexOf("*/*") < 0 &&
+                        req.headers.accept.indexOf("xml") < 0) {
+                        next(new UnsupportedMediaTypeError());
+                    } else next();
+                }
+            });
         });
+
         router.get("/", ensureODataHeaders, (req, _, next) => {
             if (typeof req.query == "object" && Object.keys(req.query).length > 0) return next(new HttpRequestError(500, "Unsupported query"));
             next();
         }, server.document().requestHandler());
+
+        router.post('/login', async (req, res) => {
+            console.log('login');
+            
+            var LoginResult = await SecurityHelper.Login(req.body["email"], req.body["password"]);
+            if (LoginResult) {
+                let isActive = true;
+                if (LoginResult["Status"] === 0 && !LoginResult["ReferralId"] ) {
+                    isActive = false;
+                }
+                var roleId = await SecurityHelper.GetRoleId(LoginResult["Id"]);
+                var token = jwt.sign({ id: LoginResult["Id"], email: LoginResult["Email"], userType: LoginResult["UserType"], roleId: roleId }, process.env.JWT_SECRET, {
+                    expiresIn: parseInt(process.env.JWT_EXPIRESIN)// expires in 24 hours
+                });
+                if (LoginResult["Status"] === 1 || (LoginResult["Status"] === 0)) {
+                    res.json({ "success": true, "token": token, "userId": LoginResult["Id"], "roleId": roleId, "userType": LoginResult["UserType"], "isMissedInfomation": LoginResult["IsMissedInfomation"], "IsActive": isActive });
+                } else if (LoginResult["Status"] === -1) {
+                    res.json({ "success": false, "token": null, "message": "Tài khoản đã ngưng hoạt động." });
+                } else {
+                    res.json({ "success": false, "token": null, "message": "Đã có lỗi xảy ra. Vui lòng thử lại sau." });
+                }
+            }
+            else {
+                res.json({ "success": false, "token": null, "message": "Thông tin đăng nhập chưa đúng." });
+            }
+
+        });
+
+        router.get('/decodetoken', async (req, res) => {
+            jwt.verify(req.query.token, process.env.JWT_SECRET, function (err, decoded) {
+                if (err) return res.status(500).send({ auth: false, message: 'Failed to authenticate token.' });
+                return res.json({ "decode": decoded });
+            })
+        });
+
         router.get("/\\$metadata", server.$metadata().requestHandler());
         router.use(server.requestHandler());
         router.use(server.errorHandler);
 
-        if (typeof path == "number"){
-            if (typeof port == "string"){
+        if (typeof path == "number") {
+            if (typeof port == "string") {
                 hostname = "" + port;
             }
             port = parseInt(<any>path, 10);
             path = undefined;
         }
-        if (typeof port == "number"){
+        if (typeof port == "number") {
             let app = express();
+            // var memoryStore = new session.MemoryStore();
+            // app.use(session({
+            //     secret:'thisShouldBeLongAndSecret',
+            //     resave: false,
+            //     saveUninitialized: true,
+            //     store: memoryStore
+            //   }));
+
+            // var keycloak = new Keycloak({ store: memoryStore });
+            // app.use(keycloak.middleware());
             app.use((<any>path) || "/", router);
+            //app.use(fileUpload());
+
             return app.listen(port, <any>hostname);
         }
         return router;
     }
 }
-export class ODataServer extends ODataBase<ODataServerBase, typeof ODataServerBase>(ODataServerBase){}
+export class ODataServer extends ODataBase<ODataServerBase, typeof ODataServerBase>(ODataServerBase) { }
 
 /** ?????????? */
 /** Create Express middleware for OData error handling */
-export function ODataErrorHandler(err, _, res, next){
-    if (err){
+export function ODataErrorHandler(err, _, res, next) {
+    if (err) {
         if (res.headersSent) {
             return next(err);
         }
         let statusCode = err.statusCode || err.status || (res.statusCode < 400 ? 500 : res.statusCode);
         if (!res.statusCode || res.statusCode < 400) res.status(statusCode);
+
         res.send({
+            success: false,
             error: {
                 code: statusCode,
                 message: err.message,
                 stack: process.env.ODATA_V4_DISABLE_STACKTRACE ? undefined : err.stack
             }
         });
-    }else next();
+    } else next();
 }
 
 /** Create Express server for OData Server
  * @param server OData Server instance
  * @return       Express Router object
  */
-export function createODataServer(server:typeof ODataServer):express.Router;
+export function createODataServer(server: typeof ODataServer): express.Router;
 /** Create Express server for OData Server
  * @param server OData Server instance
  * @param port   port number for Express to listen to
  */
-export function createODataServer(server:typeof ODataServer, port:number):http.Server;
+export function createODataServer(server: typeof ODataServer, port: number): http.Server;
 /** Create Express server for OData Server
  * @param server OData Server instance
  * @param path   routing path for Express
  * @param port   port number for Express to listen to
  */
-export function createODataServer(server:typeof ODataServer, path:string, port:number):http.Server;
+export function createODataServer(server: typeof ODataServer, path: string, port: number): http.Server;
 /** Create Express server for OData Server
  * @param server   OData Server instance
  * @param port     port number for Express to listen to
  * @param hostname hostname for Express
  */
-export function createODataServer(server:typeof ODataServer, port:number, hostname:string):http.Server;
+export function createODataServer(server: typeof ODataServer, port: number, hostname: string): http.Server;
 /** Create Express server for OData Server
  * @param server   OData Server instance
  * @param path     routing path for Express
@@ -354,6 +680,6 @@ export function createODataServer(server:typeof ODataServer, port:number, hostna
  * @param hostname hostname for Express
  * @return         Express Router object
  */
-export function createODataServer(server:typeof ODataServer, path?:string | RegExp | number, port?:number | string, hostname?:string):http.Server | express.Router{
+export function createODataServer(server: typeof ODataServer, path?: string | RegExp | number, port?: number | string, hostname?: string): http.Server | express.Router {
     return server.create(path, port, hostname);
 }
