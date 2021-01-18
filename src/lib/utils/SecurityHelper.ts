@@ -390,7 +390,6 @@ export class SecurityHelper {
             var hash = crypto.createHash("sha256")
                 .update(password)
                 .digest("hex");
-            console.log(queryResult.rows[0]["Password"], hash)
             if (queryResult.rows[0]["Password"] == hash) {
                 queryResult.rows[0]["IsMissedInfomation"] = queryResult.rows[0].FullName == null || queryResult.rows[0].Tel == null || queryResult.rows[0].Email == null || queryResult.rows[0].CityId == null || queryResult.rows[0].DistrictId == null || queryResult.rows[0].Address == null;
                 return queryResult.rows[0];
