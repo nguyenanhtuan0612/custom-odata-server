@@ -8,3 +8,5 @@ docs
 .nyc_output
 tmp.*
 .DS_Store
+.tslint
+package-lock.json
