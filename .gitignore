@@ -9,4 +9,3 @@ docs
 tmp.*
 .DS_Store
 .tslint
-package-lock.json
