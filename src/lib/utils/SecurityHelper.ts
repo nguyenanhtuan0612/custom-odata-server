@@ -152,7 +152,7 @@ export class SecurityHelper {
     }
     static async GetParamByName(arrParams: Object, paramName: string): Promise<any> {
 
-        var cArrParams = arrParams as [];
+        var cArrParams = arrParams as any[];
         for (var item of cArrParams) {
             if (item["key"] == paramName) {
                 return item["value"];
@@ -346,6 +346,7 @@ export class SecurityHelper {
                         return { "success": false, "message": "Not allow" };
                     }
                 }
+                return { "success": false, "message": "Method not allow" };
             }
             // khong phai member, return false;
             else
