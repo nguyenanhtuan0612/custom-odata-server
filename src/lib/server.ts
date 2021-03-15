@@ -18,15 +18,6 @@ import { HttpRequestError, UnsupportedMediaTypeError } from "./error";
 import { ContainerBase } from "./edm";
 import { Readable, Writable } from "stream";
 import { SecurityHelper, UserRole } from "./utils/SecurityHelper";
-import { ElasticSearchService } from './utils/ElasticSearchService';
-import { GHTK_CallbackInfo } from './utils/GHTK_CallbackInfo';
-import connect from './utils/connect';
-import { EmailService } from './utils/email.service';
-import { GHTK_service } from './utils/GHTK_service';
-import { UserService } from './utils/user.service';
-import { ServiceHelper } from './utils/service';
-import { BookService } from './utils/book.service';
-import { OrderService } from './utils/order.service';
 import { Constants } from './utils/constants';
 
 const dotenv = require('dotenv');
