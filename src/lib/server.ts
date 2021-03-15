@@ -17,12 +17,13 @@ import { ODataProcessor, ODataProcessorOptions, ODataMetadataType } from "./proc
 import { HttpRequestError, UnsupportedMediaTypeError } from "./error";
 import { ContainerBase } from "./edm";
 import { Readable, Writable } from "stream";
-import { SecurityHelper, UserRole } from "./utils/SecurityHelper";
-import { Constants } from './utils/constants';
+import { SecurityHelper } from "./utils/SecurityHelper";
 
-const dotenv = require('dotenv');
+
 const asyncRedis = require("async-redis");
-// const session = require('express-session');
+
+const session = require('express-session');
+
 let jwt = require('jsonwebtoken');
 var fs = require('fs');
 var util = require('util');
@@ -47,30 +48,31 @@ export interface ODataHttpContext {
     request: express.Request & Readable
     response: express.Response & Writable
 }
-
 async function CheckPriviligeRequest(req) {
-    // skip security by following function
-    if (req.originalUrl.indexOf("/login") >= 0
-        || req.originalUrl.indexOf('$metadata') >= 0
-        || req.originalUrl.indexOf('v_') >= 0
-        || req.originalUrl.indexOf('resetPasswordUserBE') >= 0
-        || req.originalUrl.indexOf('Users/Mcbook.sendOTPToEmail') >= 0
-        || req.originalUrl.indexOf('Users/Mcbook.registerUser') >= 0
-        || req.originalUrl.indexOf('Users/Mcbook.updatePassword') >= 0) {
-        return { "success": true, "message": "" }
-    }
-
-    // start check security
     var body = req.body;
     var token = null;
     try {
         var Authorization = req.headers["authorization"].toString();
         token = Authorization.replace('Bearer ', '').replace('bearer ', '');
+        // var AuthorizationParts=Authorization.split('Bearer ');
+        // if(AuthorizationParts&& AuthorizationParts.length>0)
+        // {
+        //    token=AuthorizationParts[1];
+        // }
     }
     catch (err) {
 
     }
 
+    var partnerid = '1';
+    var sessionid = '';
+    // fix bug partnerid is 1 when > 11
+    if (req.headers["partnerid"]) {
+        partnerid = req.headers["partnerid"].toString();
+    }
+    if (req.headers["sessionid"]) {
+        sessionid = req.headers["sessionid"].toString();
+    }
     var method = req.method;
     var originUrl = req.url;
     var url = req.url;
@@ -87,7 +89,7 @@ async function CheckPriviligeRequest(req) {
         splitChar = '/';
         index = url.indexOf('/');
     }
-
+    
     var controllerName = url.split("(")[0];
     var idCheck = 0;
     try {
@@ -100,46 +102,48 @@ async function CheckPriviligeRequest(req) {
         splitChar = '(';
         index = url.indexOf('(');
     }
+    // var controllerName = url.split(splitChar)[0];
+    // var id = 0;
+    // if (method == "PUT" || method == "PATCH" || method == "DELETE" || method == "GET") {
+    //     try {
+    //         id = parseInt(originUrl.replace('/', '').replace(controllerName, '').replace('(', '').replace(')', ''));
+    //     }
+    //     catch (err) {
 
+    //     }
+
+    // }
+
+    // return await CheckPrivilige(token, partnerid, method, controllerName, req.body, id);
+    var decodeToken = jwt.decode(token);
+    if (decodeToken && (decodeToken.preferred_username === process.env.KEYCLOAK_USER)) {
+        return { "success": true, "message": "" };
+    }
     var user_id = null;
-    var role_id = null;
     try {
-        await jwt.verify(token, process.env.JWT_SECRET, function (err, decoded) {
-            if (!err) {
-                user_id = decoded.id;
-                role_id = decoded.roleId;
-            }
-
-            return null;
-        });
+        user_id = decodeToken.id;
     }
     catch (err) {
 
     }
-
-    if (!user_id) {
-        return { "success": false, "message": "Không thể định danh tài khoản. Vui lòng đăng nhập lại." };
-    }
-
-    // if (url.startsWith("ExternalService")) {
-    //     return await SecurityHelper.CheckPrivilige_ExternalSecurity(user_id, role_id, method, req)
-    // }
-
     var isFunction = false;
     if (url.indexOf('/Mcbook.') >= 0)
         isFunction = true;
     if (!isFunction) {
         var controllerNames = url.split(splitChar)[0];
+
         var id = 0;
-        if (method !== "POST") {
+        if (method == "PUT" || method == "PATCH" || method == "DELETE" || method == "GET") {
             try {
                 id = parseInt(originUrl.replace('/', '').replace(controllerNames, '').replace('(', '').replace(')', ''));
             }
             catch (err) {
-                
+
             }
-        } 
-        return await SecurityHelper.CheckPrivilige(user_id, role_id, method, controllerNames, req.body, id);
+
+        }
+
+        return await CheckPrivilige(token, partnerid, method, controllerNames, req.body, id);
     }
     else {
         try {
@@ -148,11 +152,11 @@ async function CheckPriviligeRequest(req) {
             var params = parts[1].replace(')', '');
             for (var item of params.split(',')) {
                 var itemparts = item.split('=');
-                // var paramName = itemparts[0].toString();
+                var paramName = itemparts[0].toString();
                 arrParams.push({ "key": itemparts[0], "value": itemparts[1] });
 
             }
-            return await SecurityHelper.CheckPrivilegeFunction(user_id, role_id, parts[0], arrParams);
+            return await CheckPrivilegeFunction(user_id, parts[0], arrParams);
 
         }
         catch (error) {
@@ -161,54 +165,179 @@ async function CheckPriviligeRequest(req) {
     }
 }
 
-function Apply_Filter(url: string, userId: string, appId: string) {
+async function CheckPrivilegeFunction(user_id: string, fName: string, fParams: Object) {
+    return await SecurityHelper.CheckPrivilegeFunction(user_id, fName, fParams);
+    // return true;
+}
+async function CheckPrivilige(token: string, partnerId: string, method: string, controllerName: string, data: JSON, id: number) {
+    var decodeToken = jwt.decode(token);
+    if (decodeToken && (decodeToken.preferred_username === "admin1" || decodeToken.preferred_username === "admin")) {
+        return { "success": true, "message": "" };
+    }
+    var user_id = null;
+    try {
+        user_id = decodeToken.id;
+    }
+    catch (err) {
+
+    }
+    return await SecurityHelper.CheckPrivilige(user_id, partnerId, method, controllerName, data, id);
+    // return true;
+}
+function Apply_Partner_Filter(url: string, partnerid: number, affiliateid: number) {
     url = url.replace(/[\/]+/g, "/").replace(":/", "://");
     url = url.split('+').join('%20');
     url = decodeURIComponent(url);
+    console.info(url);
+    if (url.indexOf('/Mcbook.') >= 0) {
+        var arr1 = url.split('(');
+        if (arr1 && arr1.length > 1) {
+            var arr2 = arr1[1].split(')');
+            if (arr2 && arr2.length > 0) {
+                var allParams = arr2[0].replace(' ', '');
+                if (allParams.length > 0) {
+                    url = url.replace(')', ',_h_partnerid=' + partnerid + ',_h_affiliateid=' + affiliateid + ')');
+                }
+                else {
+                    url = url.replace(')', '_h_partnerid=' + partnerid + ',_h_affiliateid=' + affiliateid + ')');
+                }
+            }
 
-    if (url.indexOf('/Books(') >= 0) {
-        if (url.indexOf('$filter=') >= 0) {
-            url = url.replace('$filter=', '$filter=Id eq ' + userId + ' and ');
         }
-        else {
-            if (url.indexOf('?') >= 0) {
-                url = url + '&$filter=Id eq ' + userId;
+
+
+    }
+    else {
+        if (partnerid > 1) {
+            if ((url.indexOf('/Books') == 0 || url.indexOf('/Categories') == 0 || url.indexOf('/Authors') == 0 || url.indexOf('/Subscribers') == 0)
+                && (url.indexOf('/Books(') < 0 && url.indexOf('/Categories(') < 0 && url.indexOf('/Authors(') < 0 && url.indexOf('/Subscribers(') < 0)) {
+                var referenceModelName = 'PartnerBooks1';
+                if (url.indexOf('/Categories') == 0)
+                    referenceModelName = 'PartnerCategory1';
+                else if (url.indexOf('/Authors') == 0)
+                    referenceModelName = 'PartnerAuthors1';
+                else if (url.indexOf('/Subscribers') == 0)
+                    referenceModelName = 'SubscriberCategories';
+                // url=url+"?$filter=ParnterBooks1/any(x:x/PartnerId eq "+partnerid+")";
+                if (url.indexOf('$filter=') >= 0) {
+                    url = url.replace('$filter=', '$filter=' + referenceModelName + '/any(x:x/PartnerId eq ' + partnerid + ') and ');
+                }
+                else {
+                    if (url.indexOf('?') >= 0) {
+                        url = url + '&$filter=' + referenceModelName + '/any(x:x/PartnerId eq ' + partnerid + ')';
+                    }
+                    else {
+                        url = url + '?$filter=' + referenceModelName + '/any(x:x/PartnerId eq ' + partnerid + ')';
+                    }
+                }
+            }
+        } else {
+            //subscriber for case MCBOOKS
+            if (url.indexOf('/Subscribers') == 0 && url.indexOf('/Subscribers(') < 0) {
+                if (url.indexOf('$filter=') >= 0) {
+                    url = url.replace('$filter=', '$filter=SubscriberCategories/any(x:x/PartnerId eq ' + partnerid + ') and ');
+                }
+                else {
+                    if (url.indexOf('?') >= 0) {
+                        url = url + '&$filter=SubscriberCategories/any(x:x/PartnerId eq ' + partnerid + ')';
+                    }
+                    else {
+                        url = url + '?$filter=SubscriberCategories/any(x:x/PartnerId eq ' + partnerid + ')';
+                    }
+                }
+            }
+        }
+
+        if (url.indexOf('/Books(') >= 0 || url.indexOf('/Authors(') >= 0) {
+            if (url.indexOf('$filter=') >= 0) {
+                url = url.replace('$filter=', '$filter=Id eq ' + partnerid + ' and ');
             }
             else {
-                url = url + '?$filter=Id eq ' + userId;
+                if (url.indexOf('?') >= 0) {
+                    url = url + '&$filter=Id eq ' + partnerid;
+                }
+                else {
+                    url = url + '?$filter=Id eq ' + partnerid;
+                }
+            }
+        }
+
+
+        if ((url.indexOf('/Articles') == 0 && url.indexOf('/Articles(') < 0)
+            || (url.indexOf('/ACategories') == 0 && url.indexOf('/ACategories(') < 0)
+            || (url.indexOf('/BookEvaluates') == 0 && url.indexOf('/BookEvaluates(') < 0)
+            || (url.indexOf('/BookReserves') == 0 && url.indexOf('/BookReserves(') < 0)
+            || (url.indexOf('/HotDeal') == 0 && url.indexOf('/HotDeal(') < 0)
+            || (url.indexOf('/MemberActions') == 0 && url.indexOf('/MemberActions(') < 0)
+            || (url.indexOf('/v_member_actions') == 0 && url.indexOf('/v_member_actions(') < 0)
+            // || url.indexOf('/MemberDeliveryInfos') == 0
+            || (url.indexOf('/Notifications') == 0 && url.indexOf('/Notifications(') < 0)
+            || (url.indexOf('/Orders') == 0 && url.indexOf('/Orders(') < 0)
+            || (url.indexOf('/v_orders') == 0 && url.indexOf('/v_orders(') < 0)
+            || (url.indexOf('/Promotions') == 0 && url.indexOf('/Promotions(') < 0)
+            || (url.indexOf('/v_hotdeal') == 0 && url.indexOf('/v_hotdeal(') < 0)
+            || (url.indexOf('/v_delivery') == 0 && url.indexOf('/v_delivery(') < 0)
+            || (url.indexOf('/Members') == 0 && url.indexOf('/Members(') < 0)
+
+        ) {
+            // MC Books can view all Members
+            if (partnerid == 1 && url.indexOf('/Members') == 0) {
+                // ignore filter
+            }
+            // MC Books can view all v_orders -> this is for BE, only BE using v_orders
+            else if (partnerid == 1 && url.indexOf('/v_orders') == 0) {
+                // ignore filter
+            }
+            // MC Books can view all v_delivery -> this is for BE, only BE using v_delivery
+            else if (partnerid == 1 && url.indexOf('/v_delivery') == 0) {
+                // ignore filter
+            }
+            // Ignore filter for Bai viet cua CTV
+            else if (partnerid == 1 && url.indexOf('/Articles') == 0 && url.indexOf('MCBooksRequestApprovalStatus') != -1) {
+                // ignore filter
+            }
+            // If filter contains user_id condition -> ignore filter by partnerid (FE needs this logic to can get member at the first time open FE page)
+            else if (url.indexOf('user_id') != -1) {
+                // ignore filter
+            }
+            // If query to get information of correct members with member id -> need to ignore filter because partner id
+            else if (url.indexOf('/Members(') == 0) {
+                // ignore filter
+            }
+            else {
+                // add fitler for partner
+
+                if (url.indexOf('$filter=') >= 0) {
+                    url = url.replace('$filter=', '$filter=PartnerId eq ' + partnerid + ' and ');
+                }
+                else {
+                    if (url.indexOf('?') >= 0) {
+                        url = url + '&$filter=PartnerId eq ' + partnerid;
+                    }
+                    else {
+                        url = url + '?$filter=PartnerId eq ' + partnerid;
+                    }
+                }
             }
         }
     }
+    if (url.indexOf('Mcbook.getPartnerByUrl(') >= 0 || url.indexOf('Mcbook.checkExistingPartnerByWebsite(') >= 0) {
+        var extractdata = url.match(/\'(.*?)\'/g);
+        if (extractdata && extractdata.length > 0) {
+            var cValue = replaceAll(extractdata[0], '/', '_P_V_A_L_U_E');  // extractdata[0].replace('/','_P_V_A_L_U_E');
+            url = url.replace(extractdata[0], cValue);
+        }
+    }
 
-    // if (url.indexOf("/Mcbook.") >= 0) {
-
-    //     var arr1 = url.split('(');
-    //     if (arr1 && arr1.length > 1) {
-    //         var arr2 = arr1[1].split(')');
-    //         if (arr2 && arr2.length > 0) {
-    //             var allParams = arr2[0].replace(' ', '');
-    //             if (allParams.length > 0) {
-    //                 url = url.replace(')', `,appId='${appId}')`);
-    //             }
-    //             else {
-    //                 url = url.replace(')', `appId='${appId}')`);
-    //             }
-    //         }
-
-    //     }
-
-    // }
-
+    console.log("Before add IsDeleted: " + url);
+    // filter to ingore records which IsDeleted=true
+    // we have to re-check all views to ignore records which IsDeleted=true so don't need to filter for views
+    // ignore query to corrent a record with id like /Books(12)
+    // ignore functions (if not ingore -> so slow this is bug of odata server)
     var tableWithId = new RegExp(/^\/[a-zA-Z]*\([1-9]*\)/);
     var isTableWithId = tableWithId.test(url);
     var tempUrlRemoveChildFilter = replaceAll(url, '($filter=', '');
-
-    if (url.startsWith("/v_") === false
-        && url.endsWith("/login") === false
-        && url.endsWith("$metadata") === false
-        && url.indexOf('/Mcbook.') === -1
-        && (isTableWithId === false)
-        && (url.startsWith("/ExternalService") === false)) {
+    if (url.startsWith("/v_") == false && url.indexOf('/Mcbook.') == -1) {
         if (url.indexOf("$filter=") != - 1 && tempUrlRemoveChildFilter.indexOf("$filter=") != - 1) {
             const temp1 = url.split("$filter=");
             const temp2 = temp1[1].split("&");
@@ -223,6 +352,8 @@ function Apply_Filter(url: string, userId: string, appId: string) {
             }
         }
     }
+
+    console.log("After add IsDeleted: " + url);
 
     return url;
 }
@@ -252,6 +383,30 @@ function ensureODataContentType(req, res, contentType?) {
     res.contentType(contentType);
 }
 function ensureODataHeaders(req, res, next?) {
+    /*
+      if(!req.url.startsWith('/Users/Mcbook.Login'))
+      {
+        //begin authentication
+            let token = req.headers['x-access-token'] || req.headers['authorization']; // Express headers are auto converted to lowercase
+            if (token&&token.startsWith('Bearer ')) {
+            // Remove Bearer from string
+            token = token.slice(7, token.length);              }
+            if (token) {
+                jwt.verify(token, 'worldisfullofdevelopers', (err, decoded) => {
+                if (err) {
+                    throw  err;
+                } else {
+                    req.decoded = decoded;
+                    //next();
+                }
+                });
+            } else {
+                throw new Error('token does not exist');
+            }
+
+        //end authentication
+      }
+      */
 
     res.setHeader("OData-Version", "4.0");
 
@@ -299,6 +454,9 @@ export class ODataServerBase extends Transform {
     static requestHandler() {
         return (req: express.Request, res: express.Response, next: express.NextFunction) => {
             try {
+
+
+
                 ensureODataHeaders(req, res);
                 let processor = this.createProcessor({
                     url: req.url,
@@ -324,9 +482,15 @@ export class ODataServerBase extends Transform {
                         }
                     }
                 });
+
+
+
                 // this.mytestfunction().then(
                 //     console.log
                 // );
+
+
+
                 let hasError = false;
                 processor.on("data", (chunk, encoding, done) => {
                     if (!hasError) {
@@ -339,10 +503,6 @@ export class ODataServerBase extends Transform {
                     try {
                         if (result) {
                             res.status((origStatus != res.statusCode && res.statusCode) || result.statusCode || 200);
-                            if (result.statusCode == 204) {
-                                res.status(200);
-                                res.send({ "success": true });
-                            }
                             if (!res.headersSent) {
                                 ensureODataContentType(req, res, result.contentType || "text/plain");
                             }
@@ -489,33 +649,39 @@ export class ODataServerBase extends Transform {
     static create(path?: string | RegExp | number, port?: number | string, hostname?: string): http.Server | express.Router {
         let server = this;
         let router = express.Router();
+        // router.use((req, _, next) => {
+        //     req.url = req.url.replace(/[\/]+/g, "/").replace(":/", "://");
+        //     if (req.headers["odata-maxversion"] && req.headers["odata-maxversion"] < "4.0") return next(new HttpRequestError(500, "Only OData version 4.0 supported"));
+        //     next();
+        // });
 
-        router.use(async (req, _, next) => {
-            let userId = '';
-            let appId = null;
-            var token = null;
-            try {
-                var Authorization = req.headers["authorization"].toString();
-                token = Authorization.replace('Bearer ', '').replace('bearer ', '');
-                await jwt.verify(token, process.env.JWT_SECRET, function (err, decoded) {
-                    if (!err) {
-                        userId = decoded.id;
-                    }
+        router.use((req, _, next) => {
 
-                    return null;
-                });
+
+            //  var partnerid = '1';
+            //  // fix bug partnerid is 1 when > 11
+            //  if (req.headers["partnerid"]) {
+            //      partnerid = req.headers["partnerid"].toString();
+            //  }    
+
+            //         //var partnerid = '1';
+            //         // fix bug partnerid is 1 when > 11
+            //         // if (req.headers["partnerid"]) {
+            //         //     partnerid = req.headers["partnerid"].toString();
+            //         // }
+            var partnerid = '1';
+            var affiliateid = '0';
+            // fix bug partnerid is 1 when > 11
+            if (req.headers["partnerid"]) {
+                partnerid = req.headers["partnerid"].toString();
             }
-            catch (err) {
-
+            if (req.headers["affiliateid"]) {
+                affiliateid = req.headers["affiliateid"].toString();
             }
-
-            appId = req.url.indexOf("/Bizbook") >= 0 ? Constants.AppId.Bizbook_Vip : Constants.AppId.TKBook_Vip;
-
-            if (req.method === "GET") {
-                req.url = Apply_Filter(req.url, userId, appId);
-                req.originalUrl = Apply_Filter(req.originalUrl, userId, appId);
+            if (partnerid && req.method == 'GET') {
+                req.url = Apply_Partner_Filter(req.url, parseInt(partnerid), parseInt(affiliateid));
+                req.originalUrl = Apply_Partner_Filter(req.originalUrl, parseInt(partnerid), parseInt(affiliateid));
             }
-
             req.url = req.url.replace(/[\/]+/g, "/").replace(":/", "://");
             req.url = req.url.split('+').join('%20');
             // req.url = req.url.split('/').join('%2F');
@@ -528,11 +694,10 @@ export class ODataServerBase extends Transform {
             if (req.headers["odata-maxversion"] && req.headers["odata-maxversion"] < "4.0") return next(new HttpRequestError(500, "Only OData version 4.0 supported"));
             next();
         });
-        router.use(bodyParser.json());
+        router.use(bodyParser.json({ limit: '10mb' }));
         if ((<any>server).cors) router.use(cors());
         router.use((req, res, next) => {
             var body = req.body;
-
             CheckPriviligeRequest(req).then((checkPriviligeResult) => {
                 if (!checkPriviligeResult["success"])
                     return next(new HttpRequestError(401, checkPriviligeResult["message"]));
@@ -547,47 +712,15 @@ export class ODataServerBase extends Transform {
                     } else next();
                 }
             });
-        });
 
+            // var havePrivilige=await CheckPriviligeRequest(req);
+
+
+        });
         router.get("/", ensureODataHeaders, (req, _, next) => {
             if (typeof req.query == "object" && Object.keys(req.query).length > 0) return next(new HttpRequestError(500, "Unsupported query"));
             next();
         }, server.document().requestHandler());
-
-        router.post('/login', async (req, res) => {
-            console.log('login');
-            
-            var LoginResult = await SecurityHelper.Login(req.body["email"], req.body["password"]);
-            if (LoginResult) {
-                let isActive = true;
-                if (LoginResult["Status"] === 0 && !LoginResult["ReferralId"] ) {
-                    isActive = false;
-                }
-                var roleId = await SecurityHelper.GetRoleId(LoginResult["Id"]);
-                var token = jwt.sign({ id: LoginResult["Id"], email: LoginResult["Email"], userType: LoginResult["UserType"], roleId: roleId }, process.env.JWT_SECRET, {
-                    expiresIn: parseInt(process.env.JWT_EXPIRESIN)// expires in 24 hours
-                });
-                if (LoginResult["Status"] === 1 || (LoginResult["Status"] === 0)) {
-                    res.json({ "success": true, "token": token, "userId": LoginResult["Id"], "roleId": roleId, "userType": LoginResult["UserType"], "isMissedInfomation": LoginResult["IsMissedInfomation"], "IsActive": isActive });
-                } else if (LoginResult["Status"] === -1) {
-                    res.json({ "success": false, "token": null, "message": "Tài khoản đã ngưng hoạt động." });
-                } else {
-                    res.json({ "success": false, "token": null, "message": "Đã có lỗi xảy ra. Vui lòng thử lại sau." });
-                }
-            }
-            else {
-                res.json({ "success": false, "token": null, "message": "Thông tin đăng nhập chưa đúng." });
-            }
-
-        });
-
-        router.get('/decodetoken', async (req, res) => {
-            jwt.verify(req.query.token, process.env.JWT_SECRET, function (err, decoded) {
-                if (err) return res.status(500).send({ auth: false, message: 'Failed to authenticate token.' });
-                return res.json({ "decode": decoded });
-            })
-        });
-
         router.get("/\\$metadata", server.$metadata().requestHandler());
         router.use(server.requestHandler());
         router.use(server.errorHandler);
@@ -630,9 +763,7 @@ export function ODataErrorHandler(err, _, res, next) {
         }
         let statusCode = err.statusCode || err.status || (res.statusCode < 400 ? 500 : res.statusCode);
         if (!res.statusCode || res.statusCode < 400) res.status(statusCode);
-
         res.send({
-            success: false,
             error: {
                 code: statusCode,
                 message: err.message,
