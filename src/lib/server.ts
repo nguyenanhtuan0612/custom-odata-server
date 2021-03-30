@@ -433,6 +433,72 @@ function startsWith(str, word) {
     return str.lastIndexOf(word, 0) === 0;
 }
 /** ODataServer base class to be extended by concrete OData Server data sources */
+(ODataParser.parserFactory as any) = function(fn) {
+    return function (source, options) {
+        source = source.replace("//", "/");
+        // let originSource = "$top=2&$filter=Id gt -1 and (Products/any(x:x/Id lt 100))&$expand=Products";
+        // \b\w*/any\([^\(]*\([^\)]*\)\)|\b\w*/any\([^\)(^\{]*\)
+        let originSource = source;
+       let testString = "(x:x/TotalPrice/Id eq null or x/TotalPrice lt 1000000000 or x/Id eq 1)";
+    // \b\w*/any\(\w:\w([/\w+]*/\w+[\040]+\w+[\040]+\w+|\w*\(\w[/w+]*/\w+,'.*'\))([\040]+(and|or)[\040]+(\w[/\w+]*/\w+[\040]+\w+[\040]+\w+|\w*\(\w[/w+]*/\w+,'.*'\)))*\)
+       let match1 = testString.match(/\b\w*[/\w*]* \b\w* \b\w*/g);
+        let match = source.match(/\b\w*\/any\(\w:(\w*\(\w[/\w+]*\/\w+,'[^()]*'\)|(\w[/\w+]*\/\w+[\040]\w+[\040](\w+|'[^'].*')))([\040]+(and|or)[\040]+(\w*\(\w[/\w+]*\/\w+,'[^()]*'\)|(\w[/\w+]*\/\w+[\040]\w+[\040](\w+|'[^'].*'))))*\)/g);
+
+        if (match != null && match.length > 0)
+        match.forEach(element => {
+            let part2 = element.split("/any")[1];
+            // part2 = part2.replace("(", "").replace(")", "");
+            part2 = part2.substring(3, part2.length - 1);
+            let part2ArrayAnd = part2.split(" and ");
+            let arrPart2 = [];
+            for (let i = 0; i < part2ArrayAnd.length; i++) {
+                arrPart2 = arrPart2.concat(part2ArrayAnd[i].split(" or "));
+            }
+            // x:contains(x/Name,'1') and x/Id eq 1
+            let part2Array = part2.split(" ") ;
+            let numberOfCoditions = arrPart2.length;
+            let replaceValue = "";
+            if (numberOfCoditions > 0) {
+                let matchfirtElement = arrPart2[0].match(/\w*\(\w[/\w+]*\/\w+,'[^'].*'\)/);
+                if (matchfirtElement != null || arrPart2[0].match(/\w[/\w+]*\/\w+[\040]\w+[\040]'[^'].*'/) != null)
+                replaceValue = "Id eq '-9999999.99999999'";
+                else
+                replaceValue = "Id eq -9999999.99999999";
+                let index = 1;
+                while (index < numberOfCoditions) {
+                 //   let matchOthersElement = arrPart2[index].match(/\w*\(\w[/w+]*\/\w+,'[^'].*'\)/);
+                      let matchOthersElement = arrPart2[index].match(/\w*\(\w[/\w+]*\/\w+,'[^'].*'\)/);
+                    // \w*\(\w[/\w+]*/\w+,'[^'].*'\)
+                    if (matchOthersElement != null || arrPart2[index].match(/\w[/\w+]*\/\w+[\040]\w+[\040]'[^'].*'/) != null)
+                    replaceValue += " and Id eq '-9999999.99999999'";
+                    else
+                    replaceValue += " and Id eq -9999999.99999999";
+                    index++;
+                }
+                source =   source.replace(element, replaceValue);
+            }
+
+        });
+        // let temp = match[0];
+      //  source = source.replace(temp, "Id eq -10000000");
+        options = options || {};
+        const raw = new Uint16Array(source.length);
+        let pos = 0;
+        for (let i = 0; i < source.length; i++) {
+            raw[i] = source.charCodeAt(i);
+        }
+        let result = fn(raw, pos, options.metadata);
+        if (!result) throw new Error("Fail at " + pos);
+        if (result.next < raw.length) throw new Error("Unexpected character at " + result.next);
+        try {
+
+            result.value.query.raw =  originSource.split("?")[1];
+        }
+        catch (error) {}
+
+        return result;
+    };
+};
 export class ODataServerBase extends Transform {
     private static _metadataCache: any
     static namespace: string
