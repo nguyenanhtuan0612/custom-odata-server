@@ -89,6 +89,7 @@ export class SecurityHelper {
     }
 
     static async CheckPrivilige(user_id: number, role_id: number[], method: string, cotrollerName: string, data: JSON, id: number): Promise<any> {
+        console.log(cotrollerName)
         switch (cotrollerName) {
             case 'Authors':
                 if (method === "GET") {
@@ -321,6 +322,7 @@ export class SecurityHelper {
             }
 
             const IsInRole = role_id.some(x => (x === UserRole.ADMIN_MANAGE_ORDER || x === UserRole.ADMIN_MANAGE_VIP));
+            console.log(IsInRole)
             if (IsInRole)
                 return { "success": true, "message": "" };
             else
@@ -342,7 +344,7 @@ export class SecurityHelper {
 
             if (method === "PATCH" || method === "PUT") {
                 const order = await this.GetEntityById(id, "Orders");
-                if (user_id === order.UserId && (data.Status === 1 || data.Status === 7)) {
+                if (user_id === order.UserId && (data.Status === 1 || data.Status === 7 || data.Status === -2)) {
                     return { "success": true, "message": "" }
                 }
 
@@ -353,6 +355,7 @@ export class SecurityHelper {
             }
 
             const IsInRole = role_id.some(x => x === UserRole.ADMIN_MANAGE_ORDER);
+            console.log(IsInRole)
             if (IsInRole)
                 return { "success": true, "message": "" };
             else

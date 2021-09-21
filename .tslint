@@ -1,0 +1,9 @@
+ERROR: (no-consecutive-blank-lines) src/lib/utils/ElasticSearchService.ts[250, 1]: Consecutive blank lines are forbidden
+ERROR: (class-name) src/lib/utils/GHTK_CallbackInfo.ts[1, 14]: Class name must be in pascal case
+ERROR: (class-name) src/lib/utils/GHTK_service.ts[8, 14]: Class name must be in pascal case
+ERROR: (no-consecutive-blank-lines) src/lib/utils/SecurityHelper.ts[70, 1]: Consecutive blank lines are forbidden
+ERROR: (no-consecutive-blank-lines) src/lib/utils/book.service.ts[71, 1]: Consecutive blank lines are forbidden
+ERROR: (class-name) src/lib/utils/constants.ts[12, 18]: Class name must be in pascal case
+ERROR: (no-consecutive-blank-lines) src/lib/utils/constants.ts[68, 1]: Consecutive blank lines are forbidden
+ERROR: (no-consecutive-blank-lines) src/lib/utils/insert.ts[57, 1]: Consecutive blank lines are forbidden
+
